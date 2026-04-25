@@ -1,34 +1,60 @@
 import os
-from flask import Flask, jsonify
+import sys
+from flask import Flask, jsonify, current_app
 from flask_cors import CORS
 from models import db
 from routes import api
 from dotenv import load_dotenv
 from flask_migrate import Migrate
+from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 
 load_dotenv()
 migrate = Migrate()
 
-def create_app(db_uri=None):
+
+def normalize_database_url(url):
+    """Fix common DATABASE_URL issues from Render and other platforms."""
+    if not url:
+        return None
+    # Strip quotes and whitespace
+    url = url.strip().strip('"').strip("'")
+    # Convert postgres:// to postgresql:// (Render sometimes uses postgres://)
+    if url.startswith('postgres://'):
+        url = 'postgresql' + url[8:]
+    return url
+
+
+def create_app(db_uri=None, test_config=None):
     app = Flask(__name__)
-    # Enable CORS for all domains (safe for public API)
     CORS(app)
 
-    app.config['SQLALCHEMY_DATABASE_URI'] = (
-        db_uri or os.environ.get('DATABASE_URL', 'sqlite:///finance.db')
-    )
-    # Required in production (set via Render env vars)
+    # Database URL resolution with normalization
+    raw_db_url = db_uri or os.environ.get('DATABASE_URL') or 'sqlite:///finance.db'
+    db_url = normalize_database_url(raw_db_url)
+    
+    app.config['SQLALCHEMY_DATABASE_URI'] = db_url
     app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-fallback-change-this')
-    # Disable SQLAlchemy event system to save memory
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+    # Prevent SQLAlchemy from eagerly connecting
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+        'connect_args': {'connect_timeout': 10} if 'postgresql' in db_url else {}
+    }
 
+    # Initialize extensions
     db.init_app(app)
     migrate.init_app(app, db)
     app.register_blueprint(api)
 
+    # Health check - always returns 200, includes DB status
     @app.route('/health')
     def health_check():
-        return jsonify(status='healthy', service='finance-backend'), 200
+        db_ready, db_message = db_is_ready()
+        return jsonify(
+            status='healthy',
+            service='finance-backend',
+            db={'ready': db_ready, 'message': db_message}
+        ), 200
 
     @app.errorhandler(404)
     def not_found(e):
@@ -42,14 +68,42 @@ def create_app(db_uri=None):
     def server_error(e):
         return jsonify(error="Internal server error"), 500
 
-    # Auto-create tables for SQLite (dev only). Production uses `flask db upgrade`.
-    if 'sqlite' in app.config['SQLALCHEMY_DATABASE_URI']:
-        with app.app_context():
-            db.create_all()
+    @app.errorhandler(503)
+    def service_unavailable(e):
+        return jsonify(error="Database unavailable", retry_after=30), 503
 
     return app
 
+
+def db_is_ready():
+    """Check if database is ready without crashing. Returns (bool, message)."""
+    try:
+        # Use a short timeout check
+        with db.engine.connect() as conn:
+            conn.execute(text('SELECT 1'))
+        return True, 'connected'
+    except OperationalError as e:
+        return False, f'database unavailable: {str(e)[:50]}'
+    except Exception as e:
+        return False, f'error: {str(e)[:50]}'
+
+
+# Create the app instance (gunicorn imports this)
+# DB connection is deferred to first request
 app = create_app()
+
+# Auto-create tables for SQLite in development (lazy, on first request)
+@app.before_request
+def init_sqlite_tables():
+    """Lazy initialization - only runs on first request."""
+    if 'sqlite' in app.config['SQLALCHEMY_DATABASE_URI']:
+        try:
+            db.create_all()
+        except Exception:
+            pass  # Tables may already exist
+    # Unregister to prevent running again
+    app.before_request_funcs[None].remove(init_sqlite_tables)
+
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))

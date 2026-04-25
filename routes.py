@@ -3,10 +3,29 @@ from models import db, User, Record
 from middleware import token_required, role_check
 from services import AuthService, FinanceService
 from datetime import datetime
+from functools import wraps
+from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 
 api = Blueprint('api', __name__)
 
+
+def require_db(f):
+    """Decorator that returns 503 if database is unavailable."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        try:
+            # Lightweight connectivity check
+            db.session.execute(text('SELECT 1'))
+        except OperationalError:
+            return jsonify({'error': 'Database unavailable', 'retry_after': 30}), 503
+        except Exception:
+            return jsonify({'error': 'Database unavailable', 'retry_after': 30}), 503
+        return f(*args, **kwargs)
+    return decorated
+
 @api.route('/auth/register', methods=['POST'])
+@require_db
 def register():
     data = request.json or {}
     user, err, status = AuthService.register_user(
@@ -19,6 +38,7 @@ def register():
     return jsonify({'msg': 'User created', 'username': user.username, 'role': user.role}), 201
 
 @api.route('/auth/login', methods=['POST'])
+@require_db
 def login():
     data = request.json or {}
     from flask import current_app
@@ -34,6 +54,7 @@ def login():
 @api.route('/admin/users', methods=['GET'])
 @token_required
 @role_check(['Admin'])
+@require_db
 def list_users():
     users = User.query.all()
     return jsonify([
@@ -44,6 +65,7 @@ def list_users():
 @api.route('/admin/users/<int:user_id>', methods=['PUT'])
 @token_required
 @role_check(['Admin'])
+@require_db
 def update_user(user_id):
     user = db.session.get(User, user_id)
     if not user:
@@ -69,6 +91,7 @@ def update_user(user_id):
 @api.route('/records', methods=['GET'])
 @token_required
 @role_check(['Analyst', 'Admin'])
+@require_db
 def get_records():
     limit = request.args.get('limit', 10, type=int)
     offset = request.args.get('offset', 0, type=int)
@@ -127,6 +150,7 @@ def get_records():
 @api.route('/records', methods=['POST'])
 @token_required
 @role_check(['Admin'])
+@require_db
 def add_record():
     record, err = FinanceService.create_record(request.json or {}, g.current_user.id)
     if err:
@@ -136,6 +160,7 @@ def add_record():
 @api.route('/records/<int:record_id>', methods=['PUT'])
 @token_required
 @role_check(['Admin'])
+@require_db
 def update_record(record_id):
     record = db.session.get(Record, record_id)
     if not record:
@@ -166,6 +191,7 @@ def update_record(record_id):
 @api.route('/records/<int:record_id>', methods=['DELETE'])
 @token_required
 @role_check(['Admin'])
+@require_db
 def delete_record(record_id):
     record = db.session.get(Record, record_id)
     if not record:
@@ -177,6 +203,7 @@ def delete_record(record_id):
 @api.route('/dashboard/summary', methods=['GET'])
 @token_required
 @role_check(['Viewer', 'Analyst', 'Admin'])
+@require_db
 def dashboard_summary():
     try:
         start = request.args.get('start_date')
