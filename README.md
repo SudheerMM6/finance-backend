@@ -185,3 +185,92 @@ malformed auth headers, all three role tiers, record CRUD and
 updates, type and category filter validation, pagination bounds,
 dashboard structure, dashboard date filtering, dashboard totals
 correctness, boolean amount rejection, and input validation.
+
+---
+
+## Deploy to Render (Production)
+
+### 1. Database Setup (Neon - Recommended)
+
+1. Go to [neon.tech](https://neon.tech) → Sign up → Create new project
+2. Choose **Postgres 15** or higher
+3. Select region: **US East (N. Virginia)** (closest to Render's Oregon region)
+4. Copy the connection string: `postgresql://user:password@host:5432/dbname`
+5. Save this for the next step
+
+### 2. Render Web Service Setup
+
+1. Go to [render.com](https://render.com) → Dashboard → **New +** → **Web Service**
+2. Connect your GitHub repo → Select this project
+3. Configure:
+   - **Name**: `finance-backend` (or your preference)
+   - **Region**: `Oregon (US West)`
+   - **Runtime**: `Python 3`
+   - **Build Command**: `pip install -r requirements.txt`
+   - **Start Command**: `gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 60`
+4. Add Environment Variables:
+   - `DATABASE_URL`: paste your Neon connection string
+   - `SECRET_KEY`: generate with: `python -c "import secrets; print(secrets.token_hex(32))"`
+5. Click **Create Web Service**
+6. Once deployed, note the URL (e.g., `https://finance-backend-xxx.onrender.com`)
+
+### 3. Run Database Migrations
+
+After the web service is live, open **Shell** in Render dashboard and run:
+
+```bash
+python migrate.py
+```
+
+This applies the initial migration and creates tables in Postgres.
+
+### 4. Smoke Test (Production)
+
+Replace `https://your-app.onrender.com` with your actual Render URL:
+
+```bash
+# Test health endpoint
+curl https://your-app.onrender.com/health
+
+# Register an admin user
+curl -X POST https://your-app.onrender.com/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin", "password": "pass123", "role": "Admin"}'
+
+# Login (save the token)
+curl -X POST https://your-app.onrender.com/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin", "password": "pass123"}'
+
+# Create a record
+curl -X POST https://your-app.onrender.com/records \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"amount": 5000, "type": "income", "category": "Salary", "date": "2025-04-01"}'
+
+# Check dashboard
+curl https://your-app.onrender.com/dashboard/summary \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+### Files Changed for Deployment
+
+| File | Purpose |
+|------|---------|
+| `app.py` | Added Flask-Migrate, /health endpoint, PORT binding |
+| `requirements.txt` | Added psycopg2-binary, gunicorn, flask-migrate |
+| `.env.example` | Documented all required env vars |
+| `migrate.py` | Production migration runner |
+| `migrations/` | Alembic migration files |
+| `render.yaml` | Infrastructure-as-code for Render |
+
+---
+
+## Alternative: Deploy via render.yaml (Blueprint)
+
+If you prefer infrastructure-as-code:
+
+1. Push the `render.yaml` to your repo
+2. In Render dashboard: **Blueprints** → **New Blueprint Instance**
+3. Select this repo → Render creates both the web service and Postgres database
+4. Note: Uses Render's managed Postgres (not Neon), but still works fine

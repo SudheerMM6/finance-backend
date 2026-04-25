@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: finance-backend
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: |
+      pip install -r requirements.txt
+      echo "Build complete"
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 60
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: finance-db
+          property: connectionString
+    healthCheckPath: /health
+
+databases:
+  - name: finance-db
+    plan: free
+    region: oregon
+    ipAllowList: []  # Required for free tier (allows connections from anywhere, including Render services)
