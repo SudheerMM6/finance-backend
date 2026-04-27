@@ -18,9 +18,19 @@ def require_db(f):
             # Lightweight connectivity check
             db.session.execute(text('SELECT 1'))
         except OperationalError:
-            return jsonify({'error': 'Database unavailable', 'retry_after': 30}), 503
+            return jsonify({
+                'error': {
+                    'code': 'DB_NOT_READY',
+                    'message': 'Database is not ready. Try again in a moment.'
+                }
+            }), 503
         except Exception:
-            return jsonify({'error': 'Database unavailable', 'retry_after': 30}), 503
+            return jsonify({
+                'error': {
+                    'code': 'DB_NOT_READY',
+                    'message': 'Database is not ready. Try again in a moment.'
+                }
+            }), 503
         return f(*args, **kwargs)
     return decorated
 

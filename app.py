@@ -17,12 +17,18 @@ _DEV_FALLBACK_SECRET = 'dev-fallback-change-this'
 
 
 def is_production():
-    """Detect production environment from env vars."""
-    return os.environ.get('FLASK_ENV') == 'production' or os.environ.get('RENDER') == 'true'
+    """Detect production environment from env vars.
+    Render sets RENDER=true automatically."""
+    return (
+        os.environ.get('FLASK_ENV') == 'production' or
+        os.environ.get('ENV') == 'production' or
+        os.environ.get('RENDER')  # Any non-empty value indicates Render
+    )
 
 
 def normalize_database_url(url):
-    """Fix common DATABASE_URL issues from Render and other platforms."""
+    """Fix common DATABASE_URL issues from Render and other platforms.
+    Also ensures psycopg3 driver is used for PostgreSQL."""
     if not url:
         return None
     # Strip quotes and whitespace
@@ -30,6 +36,9 @@ def normalize_database_url(url):
     # Convert postgres:// to postgresql:// (Render sometimes uses postgres://)
     if url.startswith('postgres://'):
         url = 'postgresql' + url[8:]
+    # Ensure psycopg3 driver is used (postgresql+psycopg://)
+    if url.startswith('postgresql://') and not url.startswith('postgresql+psycopg://'):
+        url = 'postgresql+psycopg://' + url[13:]
     return url
 
 
@@ -55,6 +64,7 @@ def create_app(db_uri=None, test_config=None):
         if not secret_key or secret_key == _DEV_FALLBACK_SECRET:
             raise RuntimeError(
                 "SECRET_KEY must be set in production. "
+                "Set it in Render dashboard: Environment → Add SECRET_KEY. "
                 "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
             )
     app.config['SECRET_KEY'] = secret_key

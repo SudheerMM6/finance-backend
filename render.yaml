@@ -7,6 +7,7 @@ services:
     buildCommand: |
       pip install -r requirements.txt
       echo "Build complete"
+    preDeployCommand: python migrate.py upgrade
     startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 60
     envVars:
       - key: PYTHON_VERSION
