@@ -8,10 +8,10 @@ services:
       pip install -r requirements.txt
       echo "Build complete"
     preDeployCommand: python migrate.py upgrade
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 60
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 60 --log-level debug --access-logfile - --error-logfile - --capture-output
     envVars:
       - key: PYTHON_VERSION
-        value: 3.11.0
+        value: 3.11.9
       - key: SECRET_KEY
         generateValue: true
       - key: DATABASE_URL

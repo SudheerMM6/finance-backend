@@ -1,5 +1,6 @@
 import os
 import sys
+import secrets
 from flask import Flask, jsonify, current_app
 from flask_cors import CORS
 from models import db
@@ -14,6 +15,9 @@ migrate = Migrate()
 
 # Known dev fallback that must not be used in production
 _DEV_FALLBACK_SECRET = 'dev-fallback-change-this'
+
+# Track if we're using a temporary emergency secret
+_using_temp_secret = False
 
 
 def is_production():
@@ -58,16 +62,24 @@ def create_app(db_uri=None, test_config=None):
     db_url = normalize_database_url(raw_db_url)
     
     app.config['SQLALCHEMY_DATABASE_URI'] = db_url
-    # SECRET_KEY handling: require in production, allow fallback in dev
+    # SECRET_KEY handling: require in production but don't crash at import
     secret_key = os.environ.get('SECRET_KEY', _DEV_FALLBACK_SECRET)
+    secret_configured = True
     if is_production():
         if not secret_key or secret_key == _DEV_FALLBACK_SECRET:
-            raise RuntimeError(
-                "SECRET_KEY must be set in production. "
+            # Log error but use temporary key to keep service alive for debugging
+            global _using_temp_secret
+            _using_temp_secret = True
+            secret_configured = False
+            secret_key = secrets.token_hex(32)  # Temporary emergency key
+            print(
+                "ERROR: SECRET_KEY not set in production! "
                 "Set it in Render dashboard: Environment → Add SECRET_KEY. "
-                "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+                "Service is running with temporary key (will invalidate on restart).",
+                file=sys.stderr
             )
     app.config['SECRET_KEY'] = secret_key
+    app.config['SECRET_CONFIGURED'] = secret_configured
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     # Prevent SQLAlchemy from eagerly connecting
     app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
@@ -79,15 +91,23 @@ def create_app(db_uri=None, test_config=None):
     migrate.init_app(app, db)
     app.register_blueprint(api)
 
-    # Health check - always returns 200, includes DB status
+    # Health check - always returns 200, includes DB and config status
     @app.route('/health')
     def health_check():
         db_ready, db_message = db_is_ready()
-        return jsonify(
-            status='healthy',
-            service='finance-backend',
-            db={'ready': db_ready, 'message': db_message}
-        ), 200
+        health_data = {
+            'status': 'healthy',
+            'service': 'finance-backend',
+            'db': {'ready': db_ready, 'message': db_message},
+            'config': {
+                'secret_configured': app.config.get('SECRET_CONFIGURED', True),
+                'using_temp_secret': _using_temp_secret
+            }
+        }
+        # Return 503 if critical config missing, but still with JSON body
+        if _using_temp_secret:
+            return jsonify(health_data), 503
+        return jsonify(health_data), 200
 
     @app.errorhandler(404)
     def not_found(e):
