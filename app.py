@@ -12,6 +12,14 @@ from sqlalchemy.exc import OperationalError
 load_dotenv()
 migrate = Migrate()
 
+# Known dev fallback that must not be used in production
+_DEV_FALLBACK_SECRET = 'dev-fallback-change-this'
+
+
+def is_production():
+    """Detect production environment from env vars."""
+    return os.environ.get('FLASK_ENV') == 'production' or os.environ.get('RENDER') == 'true'
+
 
 def normalize_database_url(url):
     """Fix common DATABASE_URL issues from Render and other platforms."""
@@ -27,14 +35,29 @@ def normalize_database_url(url):
 
 def create_app(db_uri=None, test_config=None):
     app = Flask(__name__)
-    CORS(app)
+    
+    # CORS: allow all in dev, configurable in production
+    cors_origins = os.environ.get('CORS_ORIGINS', '*')
+    if cors_origins == '*':
+        CORS(app)
+    else:
+        origins = [o.strip() for o in cors_origins.split(',')]
+        CORS(app, origins=origins)
 
     # Database URL resolution with normalization
     raw_db_url = db_uri or os.environ.get('DATABASE_URL') or 'sqlite:///finance.db'
     db_url = normalize_database_url(raw_db_url)
     
     app.config['SQLALCHEMY_DATABASE_URI'] = db_url
-    app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-fallback-change-this')
+    # SECRET_KEY handling: require in production, allow fallback in dev
+    secret_key = os.environ.get('SECRET_KEY', _DEV_FALLBACK_SECRET)
+    if is_production():
+        if not secret_key or secret_key == _DEV_FALLBACK_SECRET:
+            raise RuntimeError(
+                "SECRET_KEY must be set in production. "
+                "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+            )
+    app.config['SECRET_KEY'] = secret_key
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     # Prevent SQLAlchemy from eagerly connecting
     app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {

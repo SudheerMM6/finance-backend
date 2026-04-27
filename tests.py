@@ -16,6 +16,8 @@ class FinanceTestCase(unittest.TestCase):
     def tearDown(self):
         db.session.remove()
         db.drop_all()
+        # Dispose engine to close all connections and prevent ResourceWarning
+        db.engine.dispose()
         self.ctx.pop()
 
     def _make_user(self, username, password, role):
